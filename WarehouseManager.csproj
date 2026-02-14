@@ -1,0 +1,40 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <RootNamespace>WarehouseManager</RootNamespace>
+    <Nullable>enable</Nullable>
+  
+	<LangVersion>latest</LangVersion>
+	<RestoreAdditionalProjectSources>
+		https://api.nuget.org/v3/index.json;
+		https://nuget.bepinex.dev/v3/index.json;
+		https://nuget.samboy.dev/v3/index.json
+	</RestoreAdditionalProjectSources>
+
+	  <RootNamespace>WarehouseManager</RootNamespace>
+	  <AssemblyName>WarehouseManager</AssemblyName>
+	  <Version>$(Beta)0.9</Version>
+	  <AssemblyTitle>Warehouse Manager</AssemblyTitle>
+
+  </PropertyGroup>
+
+	<ItemGroup>
+		<PackageReference Include="BepInEx.Analyzers" Version="1.*" PrivateAssets="all" />
+		<PackageReference Include="BepInEx.Core" Version="5.*" />
+		<PackageReference Include="BepInEx.PluginInfoProps" Version="2.*" />
+		<PackageReference Include="Krafs.Publicizer" Version="2.3.0">
+			<PrivateAssets>all</PrivateAssets>
+			<IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+		</PackageReference>
+		<Publicize Include="Assembly-CSharp" />
+		<PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+		<PackageReference Include="UnityEngine.Modules" Version="2021.3.39" IncludeAssets="compile" />
+	</ItemGroup>
+	<ItemGroup>
+		<Reference Include="Assembly-CSharp.dll">
+			<HintPath>D:\SteamLibrary\steamapps\common\TCG Card Shop Simulator\Card Shop Simulator_Data\Managed\Assembly-CSharp.dll</HintPath>
+		</Reference>
+	</ItemGroup>
+
+</Project>
