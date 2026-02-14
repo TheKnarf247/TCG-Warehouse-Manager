@@ -132,19 +132,27 @@ namespace WarehouseManager.Ordering
                         continue;
 
                     // Must have warehouse big slot capacity remaining
-                    int bigSlotsFree = whBigMax - whBigCur;
+                    int reservedBigSlots = looseT.BigBoxes;
+                    int bigSlotsFree = Math.Max(0, whBigMax - whBigCur - reservedBigSlots);
+
                     if (bigSlotsFree <= 0)
                     {
-                        Plugin.Logger.LogInfo($"[ORDER] {itemType}: needs {needUnits} units but no free BIG warehouse slots ({whBigCur}/{whBigMax}).");
+                        Plugin.Logger.LogInfo(
+                            $"[ORDER] {itemType}: needs {needUnits} units but no free BIG slots. " +
+                            $"WH {whBigCur}/{whBigMax}, reserved(loose)={reservedBigSlots}."
+                        );
                         continue;
                     }
+
 
                     // How many full big boxes can we add without overfilling?
                     int maxBoxesByNeed = needUnits / upbBig; // floor
                     if (maxBoxesByNeed <= 0)
                     {
-                        Plugin.Logger.LogInfo($"[ORDER] {itemType}: needs {needUnits} units but +1 big box ({upbBig}) would overfill ({onHand + upbBig}/{targetMax}).");
-                        continue;
+                        Plugin.Logger.LogInfo(
+                            $"[ORDER] {itemType}: needs {needUnits} units but no free BIG slots. " +
+                            $"WH {whBigCur}/{whBigMax}, reserved(loose)={reservedBigSlots}, free={bigSlotsFree}."
+                        );
                     }
 
                     int boxesToOrder = Math.Min(maxBoxesByNeed, bigSlotsFree);
