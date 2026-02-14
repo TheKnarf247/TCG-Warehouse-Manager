@@ -11,6 +11,9 @@ namespace WarehouseManager.Logging
         private static readonly object _lock = new();
         private static StreamWriter? _writer;
 
+        internal static bool DebugEnabled { get; private set; }
+        internal static bool VerboseEnabled { get; private set; }
+
         private static string LogPath =>
             Path.Combine(Paths.BepInExRootPath, "patchers", "Warehouse Manager", "WarehouseManager.log");
 
@@ -42,9 +45,29 @@ namespace WarehouseManager.Logging
             }
         }
 
+        internal static void SetLevels(bool debugEnabled, bool verboseEnabled)
+        {
+            DebugEnabled = debugEnabled;
+            VerboseEnabled = verboseEnabled;
+
+            Info($"[LOG] Levels updated: Debug={DebugEnabled} Verbose={VerboseEnabled}");
+        }
+
         internal static void Info(string msg) => Write("INFO", msg);
         internal static void Warn(string msg) => Write("WARN", msg);
         internal static void Error(string msg) => Write("ERR ", msg);
+
+        internal static void Debug(string msg)
+        {
+            if (!DebugEnabled) return;
+            Write("DBG ", msg);
+        }
+
+        internal static void Verbose(string msg)
+        {
+            if (!VerboseEnabled) return;
+            Write("VERB", msg);
+        }
 
         private static void Write(string level, string msg)
         {

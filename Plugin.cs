@@ -2,12 +2,8 @@
 using BepInEx.Logging;
 using HarmonyLib;
 using UnityEngine;
-using UnityEngine.SceneManagement;
 using System;
-using BepInEx.Configuration;
 using WarehouseManager.Ordering;
-using WarehouseManager.Inventory;
-using WarehouseManager.Patches;
 using WarehouseManager.Config;
 using WarehouseManager.Integration;
 using WarehouseManager.Logging;
@@ -29,39 +25,85 @@ namespace WarehouseManager
         {
             Instance = this;
             Logger = base.Logger;
-            _harmony.PatchAll();
-            WMFileLogger.Init();
+
             WMConfig.Bind(Config);
 
+            WMFileLogger.Init();
+            ApplyLogLevels();
+
+            // Live update when config changes
+            WMConfig.DebugEnabled.SettingChanged += (_, __) => ApplyLogLevels();
+            WMConfig.VerboseLogging.SettingChanged += (_, __) => ApplyLogLevels();
+
+            _harmony.PatchAll();
+
             OncePerDayScheduler.Init(
-                s => { Logger.LogInfo(s); WMFileLogger.Info(s); },
-                s => { Logger.LogWarning(s); WMFileLogger.Warn(s); },
-                s => { Logger.LogInfo(s); WMFileLogger.Info(s); },
+                LogInfo,
+                LogWarn,
+                LogVerbose,
                 () => WMConfig.VerboseLogging.Value
             );
-            
+
             EveryXMinutesScheduler.Init(
-                s => { Logger.LogInfo(s); WMFileLogger.Info(s); },
-                s => { Logger.LogWarning(s); WMFileLogger.Warn(s); },
-                s => { if (WMConfig.VerboseLogging.Value) { Logger.LogInfo(s); WMFileLogger.Info(s); } },
+                LogInfo,
+                LogWarn,
+                LogVerbose,
                 () => WMConfig.VerboseLogging.Value
             );
 
             FateHook.Init(
-                s => { Logger.LogInfo(s); WMFileLogger.Info(s); },
-                s => { Logger.LogWarning(s); WMFileLogger.Warn(s); },
-                s =>
-                {
-                    if (WMConfig.VerboseLogging.Value)
-                    {
-                        Logger.LogInfo(s);
-                        WMFileLogger.Info(s);
-                    }
-                },
+                LogInfo,
+                LogWarn,
+                LogVerbose,
                 () => WMConfig.VerboseLogging.Value
             );
 
-            Logger.LogInfo($"Plugin {MyPluginInfo.PLUGIN_NAME} v:{MyPluginInfo.PLUGIN_VERSION} by Knarf Hasn't Exploded Yet!");
+            LogInfo($"Plugin {MyPluginInfo.PLUGIN_NAME} v:{MyPluginInfo.PLUGIN_VERSION} by Knarf Hasn't Exploded Yet!");
+        }
+
+        private static void ApplyLogLevels()
+        {
+            bool dbg = WMConfig.DebugEnabled.Value;
+            bool verb = WMConfig.VerboseLogging.Value;
+            WMFileLogger.SetLevels(dbg, verb);
+
+            // Also reflect in console (so you can confirm toggles are active)
+            Logger?.LogInfo($"[LOG] Levels applied: Debug={dbg} Verbose={verb}");
+        }
+
+        // -----------------------------------------------------------------
+        // Unified logging helpers (BepInEx + file logger always in sync)
+        // -----------------------------------------------------------------
+        internal static void LogInfo(string msg)
+        {
+            Logger.LogInfo(msg);
+            WMFileLogger.Info(msg);
+        }
+
+        internal static void LogWarn(string msg)
+        {
+            Logger.LogWarning(msg);
+            WMFileLogger.Warn(msg);
+        }
+
+        internal static void LogError(string msg)
+        {
+            Logger.LogError(msg);
+            WMFileLogger.Error(msg);
+        }
+
+        internal static void LogDebug(string msg)
+        {
+            if (!WMConfig.DebugEnabled.Value) return;
+            Logger.LogInfo(msg);
+            WMFileLogger.Debug(msg);
+        }
+
+        internal static void LogVerbose(string msg)
+        {
+            if (!WMConfig.VerboseLogging.Value) return;
+            Logger.LogInfo(msg);
+            WMFileLogger.Verbose(msg);
         }
 
         private void Update()
@@ -69,10 +111,11 @@ namespace WarehouseManager
             Hotkey.Update();
             EveryXMinutesScheduler.UpdateTick();
         }
+
         private void OnDestroy()
         {
             OncePerDayScheduler.Shutdown();
-            WMFileLogger.Shutdown();        
+            WMFileLogger.Shutdown();
         }
     }
 }

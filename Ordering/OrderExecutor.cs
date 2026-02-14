@@ -10,27 +10,12 @@ using WarehouseManager.Inventory;
 
 namespace WarehouseManager.Ordering
 {
-    /// <summary>
-    /// Normal ordering execution (big-only) using WarehouseManager.catalog.json.
-    ///
-    /// Hotkey:
-    ///   Shift + F1  => Build an order plan and add the required BIG boxes to the cart, then optionally auto-checkout.
-    ///
-    /// Rules:
-    /// - BIG ONLY (must be bigBox=true in the catalog)
-    /// - NEVER over-order: if +1 box would make on-hand > target max, we do NOT order that box
-    /// - LOOSE counts toward ONHAND, but does NOT contribute to MAX capacity
-    /// - Cannot exceed warehouse BIG slot capacity (boxesCurBig/boxesMaxBig)
-    /// - Uses JSON catalog (NOT InventoryBase restock list scanning)
-    /// </summary>
     internal static class OrderExecutor
     {
         private const float DebounceSeconds = 0.50f;
         private static float _lastPressRealtime;
 
         private static readonly KeyCode OrderKey = KeyCode.F1; // Shift+F1
-
-        // Flip this later to config; for now: auto-checkout when done adding lines.
         private const bool AutoCheckout = true;
 
         internal static void Update()
@@ -48,37 +33,29 @@ namespace WarehouseManager.Ordering
             }
         }
 
-        /// <summary>
-        /// Main flow:
-        /// 1) Load BIG-only catalog
-        /// 2) Scan inventories (shop units, warehouse boxes, loose units)
-        /// 3) Compute per-item boxes to order (big-only), respecting no-overfill + WH slot capacity
-        /// 4) Add those boxes to ScannerRestockScreen cart
-        /// 5) Auto-checkout (optional)
-        /// </summary>
         internal static void RunOrder_FromCatalog()
         {
             try
             {
-                Plugin.Logger.LogInfo("[WarehouseManager] Shift+F1 detected. Building order from catalog + inventory scans...");
+                Plugin.LogInfo("[WarehouseManager] Shift+F1 detected. Building order from catalog + inventory scans...");
 
                 var catalog = LoadCatalogBigOnly();
                 if (catalog.Count == 0)
                 {
-                    Plugin.Logger.LogWarning("[ORDER] Catalog empty or missing big-box entries. Build the catalog first.");
+                    Plugin.LogWarn("[ORDER] Catalog empty or missing big-box entries. Build the catalog first.");
                     return;
                 }
 
                 if (!CPlayerData.m_IsScannerRestockUnlocked)
                 {
-                    Plugin.Logger.LogWarning("[ORDER] Scanner Restock is LOCKED. Unlock it in-game first (the $12k upgrade).");
+                    Plugin.LogWarn("[ORDER] Scanner Restock is LOCKED. Unlock it in-game first (the $12k upgrade).");
                     return;
                 }
 
                 var screen = FindScannerRestockScreen();
                 if (screen == null)
                 {
-                    Plugin.Logger.LogWarning("[ORDER] Could not find ScannerRestockScreen in scene. Open the Scanner Restock UI once, then try again.");
+                    Plugin.LogWarn("[ORDER] Could not find ScannerRestockScreen in scene. Open the Scanner Restock UI once, then try again.");
                     return;
                 }
 
@@ -88,25 +65,51 @@ namespace WarehouseManager.Ordering
                 var sh = ShopInventoryScanner.Scan();
                 var loose = LooseBoxScanner.Scan();
 
+                // Run header + scan summary (Verbose)
+                Plugin.LogVerbose($"[ORDER][V] Run header: catalogBig={catalog.Count} autoCheckout={AutoCheckout}");
+                Plugin.LogVerbose($"[ORDER][V] Scan counts: WH keys={wh.Count}, Shop keys={sh.Count}, Loose keys={loose.Count}");
+
+                int looseTotalBoxes = 0, looseTotalBig = 0, looseTotalSmall = 0, looseTotalUnits = 0;
+                foreach (var kv in loose)
+                {
+                    looseTotalBoxes += kv.Value.Boxes;
+                    looseTotalBig += kv.Value.BigBoxes;
+                    looseTotalSmall += kv.Value.SmallBoxes;
+                    looseTotalUnits += kv.Value.UnitsCur;
+                }
+                Plugin.LogVerbose($"[ORDER][V] Loose totals: boxes={looseTotalBoxes} big={looseTotalBig} small={looseTotalSmall} unitsCur={looseTotalUnits}");
+
                 // Only plan for things you actually have represented in the world right now.
                 var allKeys = new HashSet<EItemType>();
                 foreach (var k in wh.Keys) allKeys.Add(k);
                 foreach (var k in sh.Keys) allKeys.Add(k);
                 foreach (var k in loose.Keys) allKeys.Add(k);
 
+                Plugin.LogVerbose($"[ORDER][V] allKeys={allKeys.Count}");
+
                 int totalLinesPlanned = 0;
                 int totalBoxesPlanned = 0;
 
-                // Build plan first (so we can log cleanly and checkout once)
+                int skipNotInCatalog = 0;
+                int skipNeedZero = 0;
+                int skipNoSlots = 0;
+                int skipOverfill = 0;
+                int skipZeroBoxes = 0;
+
                 var plan = new List<(EItemType itemType, int restockIndex, int boxes, int upb)>();
 
                 foreach (var itemType in allKeys.OrderBy(k => k.ToString(), StringComparer.OrdinalIgnoreCase))
                 {
                     if (!catalog.TryGetValue(itemType, out var rec))
-                        continue; // not in catalog big-only => can't order it (yet)
+                    {
+                        skipNotInCatalog++;
+                        Plugin.LogVerbose($"[ORDER][V] {itemType} SKIP: not in BIG catalog");
+                        continue;
+                    }
 
                     int upbBig = rec.UnitsPerBox;
-                    if (upbBig <= 0) continue;
+                    if (upbBig <= 0)
+                        continue;
 
                     sh.TryGetValue(itemType, out var shopT);
                     int shopCur = shopT.Current;
@@ -128,107 +131,123 @@ namespace WarehouseManager.Ordering
                     int targetMax = shopMax + whUnitsMax;
 
                     int needUnits = targetMax - onHand;
-                    if (needUnits <= 0)
-                        continue;
 
-                    // Must have warehouse big slot capacity remaining
+                    // Must have warehouse big slot capacity remaining (reserve loose big boxes)
                     int reservedBigSlots = looseT.BigBoxes;
                     int bigSlotsFree = Math.Max(0, whBigMax - whBigCur - reservedBigSlots);
 
+                    Plugin.LogVerbose(
+                        $"[ORDER][V] {itemType} | shop {shopCur}/{shopMax} | WHbig {whBigCur}/{whBigMax} upb={upbBig} " +
+                        $"| loose units={looseUnitsCur} looseBig={reservedBigSlots} | onHand={onHand} target={targetMax} need={needUnits} freeSlots={bigSlotsFree}"
+                    );
+
+                    if (needUnits <= 0)
+                    {
+                        skipNeedZero++;
+                        Plugin.LogVerbose($"[ORDER][V] {itemType} SKIP: needUnits<=0");
+                        continue;
+                    }
+
                     if (bigSlotsFree <= 0)
                     {
-                        Plugin.Logger.LogInfo(
+                        skipNoSlots++;
+                        Plugin.LogInfo(
                             $"[ORDER] {itemType}: needs {needUnits} units but no free BIG slots. " +
                             $"WH {whBigCur}/{whBigMax}, reserved(loose)={reservedBigSlots}."
                         );
                         continue;
                     }
 
-
                     // How many full big boxes can we add without overfilling?
                     int maxBoxesByNeed = needUnits / upbBig; // floor
                     if (maxBoxesByNeed <= 0)
                     {
-                        Plugin.Logger.LogInfo(
-                            $"[ORDER] {itemType}: needs {needUnits} units but no free BIG slots. " +
-                            $"WH {whBigCur}/{whBigMax}, reserved(loose)={reservedBigSlots}, free={bigSlotsFree}."
+                        skipOverfill++;
+                        Plugin.LogInfo(
+                            $"[ORDER] {itemType}: needs {needUnits} units but +1 big box ({upbBig}) would overfill ({onHand + upbBig}/{targetMax})."
                         );
+                        continue;
                     }
 
                     int boxesToOrder = Math.Min(maxBoxesByNeed, bigSlotsFree);
                     if (boxesToOrder <= 0)
+                    {
+                        skipZeroBoxes++;
+                        Plugin.LogVerbose($"[ORDER][V] {itemType} SKIP: boxesToOrder<=0 (maxByNeed={maxBoxesByNeed}, freeSlots={bigSlotsFree})");
                         continue;
+                    }
 
+                    Plugin.LogVerbose($"[ORDER][V] {itemType} PLAN: boxesToOrder={boxesToOrder} restockIdx={rec.RestockIndex}");
                     plan.Add((itemType, rec.RestockIndex, boxesToOrder, upbBig));
                 }
 
+                Plugin.LogVerbose($"[ORDER][V] Skip summary: notInCatalog={skipNotInCatalog}, needZero={skipNeedZero}, noSlots={skipNoSlots}, overfill={skipOverfill}, zeroBoxes={skipZeroBoxes}");
+                Plugin.LogVerbose($"[ORDER][V] Plan lines={plan.Count}");
+
                 if (plan.Count == 0)
                 {
-                    Plugin.Logger.LogInfo("[ORDER] No items need ordering (or ordering would overfill).");
+                    Plugin.LogInfo("[ORDER] No items need ordering (or ordering would overfill).");
                     return;
                 }
 
                 // Add to cart
                 foreach (var line in plan)
                 {
-                    Plugin.Logger.LogInfo(
+                    Plugin.LogInfo(
                         $"[ORDER] {line.itemType}: adding {line.boxes} BIG box(es) to cart " +
                         $"idx={line.restockIndex} upb={line.upb}"
                     );
 
                     try
                     {
-                        // This is the exact game method you pasted from dnSpy.
                         screen.AddToCartForCheckout(line.restockIndex, line.boxes);
-
                         totalLinesPlanned++;
                         totalBoxesPlanned += line.boxes;
                     }
                     catch (Exception ex)
                     {
-                        Plugin.Logger.LogWarning($"[ORDER] AddToCartForCheckout failed for {line.itemType} idx={line.restockIndex}: {ex.Message}");
+                        Plugin.LogWarn($"[ORDER] AddToCartForCheckout failed for {line.itemType} idx={line.restockIndex}: {ex.Message}");
                     }
                 }
 
-                Plugin.Logger.LogInfo($"[ORDER] Cart filled. Lines added={totalLinesPlanned}, boxes added={totalBoxesPlanned}.");
+                Plugin.LogInfo($"[ORDER] Cart filled. Lines added={totalLinesPlanned}, boxes added={totalBoxesPlanned}.");
 
                 // Auto-checkout
                 if (AutoCheckout && totalBoxesPlanned > 0)
                 {
-                    Plugin.Logger.LogInfo("[ORDER] Auto-checkout enabled. Attempting checkout now...");
+                    Plugin.LogInfo("[ORDER] Auto-checkout enabled. Attempting checkout now...");
                     try
                     {
-                        screen.OnPressCheckoutButton(); // handles money check + spawn + save + sounds
-                        Plugin.Logger.LogInfo("[ORDER] Checkout attempted. If you had enough money, boxes should be spawning now.");
+                        screen.OnPressCheckoutButton();
+                        Plugin.LogInfo("[ORDER] Checkout attempted. If you had enough money, boxes should be spawning now.");
                     }
-                    catch (Exception ex)                  
+                    catch (Exception ex)
                     {
-                        Plugin.Logger.LogWarning($"[ORDER] OnPressCheckoutButton failed: {ex.Message}");
+                        Plugin.LogWarn($"[ORDER] OnPressCheckoutButton failed: {ex.Message}");
                     }
-                FatePostRunner.RunDelayed(8f);
+
+                    FatePostRunner.RunDelayed(8f);
                 }
                 else
                 {
-                    Plugin.Logger.LogInfo("[ORDER] Auto-checkout disabled. Cart is ready; open scanner restock UI and press checkout.");
+                    Plugin.LogInfo("[ORDER] Auto-checkout disabled. Cart is ready; open scanner restock UI and press checkout.");
                 }
             }
             catch (Exception ex)
             {
-                Plugin.Logger.LogError($"[ORDER] RunOrder_FromCatalog failed: {ex}");
+                Plugin.LogError($"[ORDER] RunOrder_FromCatalog failed: {ex}");
             }
         }
 
         // ============================================================
-        // Find ScannerRestockScreen instance (the actual UI controller)
+        // Find ScannerRestockScreen instance
         // ============================================================
 
         private static ScannerRestockScreen? FindScannerRestockScreen()
         {
-            // Works even if inactive in hierarchy.
             var all = Resources.FindObjectsOfTypeAll<ScannerRestockScreen>();
             if (all == null || all.Length == 0) return null;
 
-            // Prefer an active one if available.
             foreach (var s in all)
             {
                 if (s != null && s.gameObject != null && s.gameObject.scene.IsValid())
@@ -239,7 +258,7 @@ namespace WarehouseManager.Ordering
         }
 
         // ============================================================
-        // Catalog loading (big-only, JSON schema: { "records":[ ... ] })
+        // Catalog loading (big-only)
         // ============================================================
 
         private sealed class CatalogRecord
@@ -257,7 +276,7 @@ namespace WarehouseManager.Ordering
             string path = CatalogService.CatalogPath;
             if (!File.Exists(path))
             {
-                Plugin.Logger.LogWarning($"[ORDER] Catalog not found: {path}");
+                Plugin.LogWarn($"[ORDER] Catalog not found: {path}");
                 return map;
             }
 
@@ -273,14 +292,13 @@ namespace WarehouseManager.Ordering
                     int upb = GetJsonInt(obj, "unitsPerBox", 0);
                     bool big = GetJsonBool(obj, "bigBox", false);
 
-                    if (!big) continue;                 // BIG ONLY
+                    if (!big) continue;
                     if (idx < 0 || upb <= 0) continue;
                     if (string.IsNullOrWhiteSpace(key)) continue;
 
                     if (!Enum.TryParse<EItemType>(key, true, out var itemType))
                         continue;
 
-                    // If duplicates exist, prefer the higher UPB big entry
                     if (!map.TryGetValue(itemType, out var existing) || upb > existing.UnitsPerBox)
                     {
                         map[itemType] = new CatalogRecord
@@ -295,15 +313,15 @@ namespace WarehouseManager.Ordering
             }
             catch (Exception ex)
             {
-                Plugin.Logger.LogError($"[ORDER] Failed to read catalog: {ex}");
+                Plugin.LogError($"[ORDER] Failed to read catalog: {ex}");
             }
 
-            Plugin.Logger.LogInfo($"[ORDER] Loaded BIG-only catalog entries: {map.Count}");
+            Plugin.LogInfo($"[ORDER] Loaded BIG-only catalog entries: {map.Count}");
             return map;
         }
 
         // ============================================================
-        // Tiny JSON helpers (schema-specific, tolerant)
+        // Tiny JSON helpers
         // ============================================================
 
         private static IEnumerable<string> SimpleJsonObjects(string json)
@@ -388,8 +406,7 @@ namespace WarehouseManager.Ordering
             if (end < 0) end = obj.Length;
 
             var s = obj.Substring(colon + 1, end - colon - 1).Trim();
-            if (bool.TryParse(s, out var v)) return v;
-            return fallback;
+            return bool.TryParse(s, out var v) ? v : fallback;
         }
 
         private static string Unescape(string s)
