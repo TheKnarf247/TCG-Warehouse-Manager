@@ -21,7 +21,7 @@ namespace WarehouseManager.Config
         internal static ConfigEntry<string> OncePerDayHHmm = null!; // "08:00" .. "21:00"
 
         internal static ConfigEntry<bool> FateEnabled = null!;
-        internal static ConfigEntry<string> DestinyComingSoon = null!;
+        internal static ConfigEntry<bool> ShopManagerEnabled = null!;
 
         // Debug suggestions
         internal static ConfigEntry<bool> DebugEnabled = null!;
@@ -58,11 +58,11 @@ namespace WarehouseManager.Config
                 "In-game time to run once-per-day, format HH:MM (08:00 - 21:00).");
 
             // 03 - Integration
+            ShopManagerEnabled = cfg.Bind("03 - Integration", "Shop Manager Enabled", false,
+                "If enabled, runs Shop Manager before and after a Warehouse Manager execution (fills shop shelves from warehouse stock).");
+
             FateEnabled = cfg.Bind("03 - Integration", "F(ATE) Enabled", false,
                 "If enabled, runs the F(ATE) integration before and after an order execution.");
-
-            DestinyComingSoon = cfg.Bind("03 - Integration", "D(ESTINY)", "Coming Soon",
-                "Coming Soon: Auto-restock shop shelves from inventory.");
 
             // 90 - Debug
             DebugEnabled = cfg.Bind("90 - Debug", "Enabled", false,
@@ -76,11 +76,10 @@ namespace WarehouseManager.Config
 
             DumpMaxEntries = cfg.Bind("90 - Debug", "DumpMaxEntries", 40,
                 "Maximum entries to dump in debug output.");
-            
+
             DebugCombinedScanHotkey = cfg.Bind("90 - Debug", "DebugCombinedScanHotkey",
                 new KeyboardShortcut(KeyCode.F9, KeyCode.LeftShift),
                 "Hotkey to run the combined inventory scan (debug).");
-
         }
 
         internal static bool TryGetOncePerDayTime(out TimeSpan time)

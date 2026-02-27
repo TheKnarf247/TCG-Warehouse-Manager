@@ -96,7 +96,7 @@ namespace WarehouseManager.Automation
             _info?.Invoke($"[EveryXMinutes] Trigger fired (every {minutes} min). Executing order...");
             try
             {
-                OrderExecutor.RunOrder_FromCatalog();
+                Plugin.RunWithIntegrations("EveryXMinutes", () => OrderExecutor.RunOrder_FromCatalog());
             }
             catch (Exception ex)
             {

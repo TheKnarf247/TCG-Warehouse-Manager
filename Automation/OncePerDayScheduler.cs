@@ -228,7 +228,7 @@ namespace WarehouseManager.Automation
                 _armedForToday = false;
 
                 _info?.Invoke($"[OncePerDay] Trigger fired at {hour:D2}:{min:D2}.");
-                OrderExecutor.RunOrder_FromCatalog();
+                Plugin.RunWithIntegrations("OncePerDay", () => OrderExecutor.RunOrder_FromCatalog());
             }
         }
 

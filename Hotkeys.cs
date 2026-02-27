@@ -37,7 +37,7 @@ namespace WarehouseManager
                 _lastPressTime = Time.realtimeSinceStartup;
 
                 LogInfo("[WarehouseManager] Manual hotkey detected. Executing auto-order...");
-                OrderExecutor.RunOrder_FromCatalog();
+                Plugin.RunWithIntegrations("ManualHotkey", () => OrderExecutor.RunOrder_FromCatalog());
                 return;
             }
 

@@ -14,7 +14,7 @@
 
 	  <RootNamespace>WarehouseManager</RootNamespace>
 	  <AssemblyName>WarehouseManager</AssemblyName>
-	  <Version>$(Beta)0.9.1</Version>
+	  <Version>$(Beta)0.9.2</Version>
 	  <AssemblyTitle>Warehouse Manager</AssemblyTitle>
 
   </PropertyGroup>

@@ -51,7 +51,15 @@ namespace WarehouseManager
                 () => WMConfig.VerboseLogging.Value
             );
 
+            // Integrations
             FateHook.Init(
+                LogInfo,
+                LogWarn,
+                LogVerbose,
+                () => WMConfig.VerboseLogging.Value
+            );
+
+            ShopManagerHook.Init(
                 LogInfo,
                 LogWarn,
                 LogVerbose,
@@ -116,6 +124,28 @@ namespace WarehouseManager
         {
             OncePerDayScheduler.Shutdown();
             WMFileLogger.Shutdown();
+        }
+
+        // -----------------------------------------------------------------
+        // NEW: One wrapper to enforce run order around ANY WM execution
+        // -----------------------------------------------------------------
+        internal static void RunWithIntegrations(string reasonTag, Action wmCoreRun)
+        {
+            try
+            {
+                // Shop Manager BEFORE WM only
+                ShopManagerHook.TryRun($"Before WM ({reasonTag})");
+
+                // WM core
+                wmCoreRun.Invoke();
+
+                // F(ATE) AFTER WM only
+                FateHook.TryRun($"After WM ({reasonTag})");
+            }
+            catch (Exception ex)
+            {
+                LogWarn($"[WM] RunWithIntegrations failed ({reasonTag}): {ex}");
+            }
         }
     }
 }
