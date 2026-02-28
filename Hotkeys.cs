@@ -10,9 +10,8 @@ using BepInEx.Configuration;
 using UnityEngine;
 using WarehouseManager.Inventory;
 using WarehouseManager.Ordering;
-// If your renamed config/logger are in different namespaces, adjust these:
-using WarehouseManager.Config;     // WMConfig
-using WarehouseManager.Logging;    // WMFileLogger
+using WarehouseManager.Config;
+using WarehouseManager.Logging;
 
 namespace WarehouseManager
 {
@@ -58,6 +57,8 @@ namespace WarehouseManager
 
                 LogInfo("[WarehouseManager] Rebuild database hotkey detected. Building one-shot catalog...");
                 CatalogService.BuildOneShotMerge(Plugin.Instance);
+                ShopInventoryScanner.InvalidateCache();
+                WarehouseInventoryScanner.InvalidateCache();
                 return;
             }
 

@@ -1,5 +1,4 @@
 ﻿#nullable enable
-
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -13,14 +12,40 @@ namespace WarehouseManager.Inventory
             public int Max;
         }
 
+        private static Shelf[]? _cachedShelves;
+        private static float _nextRefreshRealtime;
+
+        // Refresh at most every N seconds (tune)
+        private const float RefreshIntervalSeconds = 30f;
+
+        internal static void InvalidateCache()
+        {
+            _cachedShelves = null;
+            _nextRefreshRealtime = 0f;
+        }
+
+        private static Shelf[] GetShelves()
+        {
+            float now = Time.realtimeSinceStartup;
+
+            if (_cachedShelves == null || now >= _nextRefreshRealtime)
+            {
+                _cachedShelves = Resources.FindObjectsOfTypeAll<Shelf>();
+                _nextRefreshRealtime = now + RefreshIntervalSeconds;
+            }
+
+            return _cachedShelves;
+        }
+
         internal static Dictionary<EItemType, InventoryTotals> Scan()
         {
             var result = new Dictionary<EItemType, InventoryTotals>();
 
-            var shelves = Resources.FindObjectsOfTypeAll<Shelf>();
+            var shelves = GetShelves();
 
-            foreach (var shelf in shelves)
+            for (int s = 0; s < shelves.Length; s++)
             {
+                var shelf = shelves[s];
                 if (shelf == null)
                     continue;
 
@@ -30,6 +55,7 @@ namespace WarehouseManager.Inventory
                     if (!shelf.IsValidObject())
                         continue;
 
+                    // This allocates; if you know "Personal" maps to a constant/enum, we can optimize later.
                     if (shelf.m_ObjectType.ToString().StartsWith("Personal"))
                         continue;
                 }
@@ -42,8 +68,9 @@ namespace WarehouseManager.Inventory
                 if (comps == null)
                     continue;
 
-                foreach (var c in comps)
+                for (int i = 0; i < comps.Count; i++)
                 {
+                    var c = comps[i];
                     if (c == null)
                         continue;
 
@@ -51,13 +78,14 @@ namespace WarehouseManager.Inventory
                     if (itemType == EItemType.None)
                         continue;
 
-                    int cur = Mathf.Max(0, c.GetItemCount());
-                    int max = Mathf.Max(0, c.GetMaxItemCount());
-                    if (max <= 0)
-                        continue;
+                    int cur = c.GetItemCount();
+                    if (cur < 0) cur = 0;
+
+                    int max = c.GetMaxItemCount();
+                    if (max <= 0) continue;
 
                     if (!result.TryGetValue(itemType, out var totals))
-                        totals = new InventoryTotals();
+                        totals = default;
 
                     totals.Current += cur;
                     totals.Max += max;

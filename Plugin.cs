@@ -9,6 +9,7 @@ using WarehouseManager.Integration;
 using WarehouseManager.Logging;
 using WarehouseManager.Automation;
 using System.Collections;
+using System.Collections.Generic;
 
 namespace WarehouseManager
 {
@@ -149,6 +150,59 @@ namespace WarehouseManager
             }
         }
 
+        /// <summary>
+        /// Returns true if at least one packaging box exists that Stocker would consider "ready" to move.
+        /// Also returns total/ready counts for debug logging.
+        /// </summary>
+        private static bool IsAnyStockerReadyBox(out int totalBoxes, out int readyBoxes)
+        {
+            totalBoxes = 0;
+            readyBoxes = 0;
+
+            List<InteractablePackagingBox_Item>? boxes = null;
+            try
+            {
+                boxes = RestockManager.GetItemPackagingBoxListWithItem(true);
+            }
+            catch
+            {
+                return false;
+            }
+
+            if (boxes == null) return false;
+
+            totalBoxes = boxes.Count;
+
+            for (int i = 0; i < boxes.Count; i++)
+            {
+                var b = boxes[i];
+                if (b == null) continue;
+
+                if (b.m_IsStored) continue;
+                if (b.IsBoxOpened()) continue;
+                if (b.m_Collider != null && !b.m_Collider.enabled) continue;
+                if (b.GetItemType() == EItemType.None) continue;
+
+                int count = 0;
+                try
+                {
+                    count = b.m_ItemCompartment != null ? b.m_ItemCompartment.GetItemCount() : 0;
+                }
+                catch
+                {
+                    count = 0;
+                }
+
+                if (count <= 0) continue;
+
+                readyBoxes++;
+                if (readyBoxes >= 1)
+                    return true;
+            }
+
+            return false;
+        }
+
         private static IEnumerator RunWithIntegrations_Coroutine(string reasonTag, Action wmCoreRun)
         {
             // 1) Shop Manager first (wait until done)
@@ -181,58 +235,22 @@ namespace WarehouseManager
                 LogWarn($"[WM] WM core run failed ({reasonTag}): {ex}");
             }
 
-            // 3) Wait for WM ordering to actually produce boxes, then Stocker
-
+            // 3) Simple fixed delay before Stocker
             if (WMConfig.StockerEnabled.Value)
             {
-                int beforeCount = 0;
+                const float stockerDelaySeconds = 6f;
 
-                try
-                {
-                    var pre = RestockManager.GetItemPackagingBoxListWithItem(true);
-                    beforeCount = pre?.Count ?? 0;
-                }
-                catch { }
+                if (WMConfig.VerboseLogging.Value)
+                    LogVerbose($"[WM] Waiting {stockerDelaySeconds}s before running Stocker... ({reasonTag})");
 
-                // ---- WAIT FOR SPAWN (NO try/catch around yield) ----
-                float startWait = Time.realtimeSinceStartup;
-                const float spawnWaitSeconds = 10f;
-                bool sawIncrease = false;
+                float delayStart = Time.realtimeSinceStartup;
 
-                while (Time.realtimeSinceStartup - startWait < spawnWaitSeconds)
-                {
-                    int nowCount = 0;
-
-                    try
-                    {
-                        var cur = RestockManager.GetItemPackagingBoxListWithItem(true);
-                        nowCount = cur?.Count ?? 0;
-                    }
-                    catch { }
-
-                    if (nowCount > beforeCount)
-                    {
-                        sawIncrease = true;
-                        break;
-                    }
-
-                    yield return null; // ✅ safe now
-                }
-
-                // ---- SETTLE DELAY ----
-                float settleStart = Time.realtimeSinceStartup;
-                const float settleSeconds = 2f;
-
-                while (Time.realtimeSinceStartup - settleStart < settleSeconds)
+                while (Time.realtimeSinceStartup - delayStart < stockerDelaySeconds)
                     yield return null;
 
-                // ---- NOW RUN STOCKER (wrap this only) ----
                 try
                 {
-                    Stocker.TryRun($"After WM (post-order) ({reasonTag})");
-
-                    if (WMConfig.VerboseLogging.Value)
-                        LogVerbose($"[WM] Stocker post-order wait: sawIncrease={sawIncrease}, beforeBoxes={beforeCount}");
+                    Stocker.TryRun($"After WM (6s delay) ({reasonTag})");
                 }
                 catch (Exception ex)
                 {

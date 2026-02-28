@@ -1,8 +1,6 @@
 ﻿#nullable enable
-
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Reflection;
 using UnityEngine;
 
@@ -18,17 +16,59 @@ namespace WarehouseManager.Inventory
             public int BoxesMaxSmall;
         }
 
+        private static MonoBehaviour[]? _cachedShelfCompartmentMBs;
+        private static float _nextRefreshRealtime;
+        private const float RefreshIntervalSeconds = 30f;
+
+        internal static void InvalidateCache()
+        {
+            _cachedShelfCompartmentMBs = null;
+            _nextRefreshRealtime = 0f;
+        }
+
+        private static MonoBehaviour[] GetShelfCompartmentMBs()
+        {
+            float now = Time.realtimeSinceStartup;
+
+            if (_cachedShelfCompartmentMBs != null && now < _nextRefreshRealtime)
+                return _cachedShelfCompartmentMBs;
+
+            var all = Resources.FindObjectsOfTypeAll<MonoBehaviour>();
+
+            // First pass count
+            int count = 0;
+            for (int i = 0; i < all.Length; i++)
+            {
+                var mb = all[i];
+                if (mb == null) continue;
+                if (mb.GetType().Name == "ShelfCompartment")
+                    count++;
+            }
+
+            var arr = new MonoBehaviour[count];
+            int w = 0;
+            for (int i = 0; i < all.Length; i++)
+            {
+                var mb = all[i];
+                if (mb == null) continue;
+                if (mb.GetType().Name == "ShelfCompartment")
+                    arr[w++] = mb;
+            }
+
+            _cachedShelfCompartmentMBs = arr;
+            _nextRefreshRealtime = now + RefreshIntervalSeconds;
+            return arr;
+        }
+
         internal static Dictionary<EItemType, WarehouseTotals> Scan()
         {
             var dict = new Dictionary<EItemType, WarehouseTotals>();
 
-            // Find all ShelfCompartment MBs by type name (works even if type is non-public)
-            var compartments = Resources.FindObjectsOfTypeAll<MonoBehaviour>()
-                .Where(mb => mb != null && mb.GetType().Name == "ShelfCompartment")
-                .ToList();
+            var compartments = GetShelfCompartmentMBs();
 
-            foreach (var mb in compartments)
+            for (int i = 0; i < compartments.Length; i++)
             {
+                var mb = compartments[i];
                 if (mb == null) continue;
 
                 // Warehouse box-slots are the ones that can accept boxes
@@ -41,24 +81,18 @@ namespace WarehouseManager.Inventory
                 if (!TryReadInt(mb, "m_ItemAmount", "itemAmount", out int curBoxes))
                     continue;
 
-                // Some slots report max=0 when empty; we recover max as 1 for box-slot style compartments.
-                // (Most warehouse compartments are effectively 1 box per slot.)
                 int maxBoxes = 1;
                 if (TryReadInt(mb, "m_MaxItemCount", "maxItemCount", out int rawMax) && rawMax > 0)
                     maxBoxes = rawMax;
 
-                // infer big vs small by UPB max-per-box (PackagingInfo knows)
                 var pack = PackagingInfo.Get(itemType);
 
                 bool isBig =
                     pack.UpbBig > 0 &&
                     (pack.UpbSmall <= 0 || pack.UpbBig >= pack.UpbSmall);
 
-                // If both exist, try to classify by “max per slot” heuristic:
-                // If game uses big boxes in warehouse for this item, treat as big; otherwise small.
-                // (We can't read the physical box size from compartment reliably, so we use packaging defaults.)
                 if (!dict.TryGetValue(itemType, out var t))
-                    t = new WarehouseTotals();
+                    t = default;
 
                 if (isBig)
                 {
@@ -85,7 +119,6 @@ namespace WarehouseManager.Inventory
         {
             itemType = default;
 
-            // m_ItemType is usually EItemType. Sometimes it might be string; we try both.
             if (TryGetMemberValue(mb, "m_ItemType", "itemType", out object? v) && v != null)
             {
                 if (v is EItemType eit)
@@ -94,7 +127,6 @@ namespace WarehouseManager.Inventory
                     return true;
                 }
 
-                // string fallback
                 if (Enum.TryParse(typeof(EItemType), v.ToString(), true, out var parsed) && parsed is EItemType e2)
                 {
                     itemType = e2;
