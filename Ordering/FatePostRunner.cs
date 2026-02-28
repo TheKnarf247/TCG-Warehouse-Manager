@@ -29,7 +29,7 @@ namespace WarehouseManager.Ordering
         private static IEnumerator Run(float seconds)
         {
             yield return new WaitForSecondsRealtime(seconds);
-            FateHook.TryRun("POST");
+            
         }
     }
 }

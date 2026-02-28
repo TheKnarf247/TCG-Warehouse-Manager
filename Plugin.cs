@@ -26,8 +26,10 @@ namespace WarehouseManager
             Instance = this;
             Logger = base.Logger;
 
+            // Config FIRST
             WMConfig.Bind(Config);
 
+            // File logger + log levels
             WMFileLogger.Init();
             ApplyLogLevels();
 
@@ -52,13 +54,6 @@ namespace WarehouseManager
             );
 
             // Integrations
-            FateHook.Init(
-                LogInfo,
-                LogWarn,
-                LogVerbose,
-                () => WMConfig.VerboseLogging.Value
-            );
-
             ShopManagerHook.Init(
                 LogInfo,
                 LogWarn,
@@ -66,6 +61,7 @@ namespace WarehouseManager
                 () => WMConfig.VerboseLogging.Value
             );
 
+            // NOTE: FateHook removed. Stocker replaces it.
             LogInfo($"Plugin {MyPluginInfo.PLUGIN_NAME} v:{MyPluginInfo.PLUGIN_VERSION} by Knarf Hasn't Exploded Yet!");
         }
 
@@ -127,7 +123,7 @@ namespace WarehouseManager
         }
 
         // -----------------------------------------------------------------
-        // NEW: One wrapper to enforce run order around ANY WM execution
+        // One wrapper to enforce run order around ANY WM execution
         // -----------------------------------------------------------------
         internal static void RunWithIntegrations(string reasonTag, Action wmCoreRun)
         {
@@ -139,8 +135,8 @@ namespace WarehouseManager
                 // WM core
                 wmCoreRun.Invoke();
 
-                // F(ATE) AFTER WM only
-                FateHook.TryRun($"After WM ({reasonTag})");
+                // Stocker AFTER WM only (replaces F(ATE))
+                Stocker.TryRun($"After WM ({reasonTag})");
             }
             catch (Exception ex)
             {

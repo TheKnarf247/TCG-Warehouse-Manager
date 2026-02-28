@@ -58,9 +58,7 @@ namespace WarehouseManager.Ordering
                     Plugin.LogWarn("[ORDER] Could not find ScannerRestockScreen in scene. Open the Scanner Restock UI once, then try again.");
                     return;
                 }
-
-                FateHook.TryRun("PRE");
-
+                                
                 var wh = WarehouseInventoryScanner.Scan();
                 var sh = ShopInventoryScanner.Scan();
                 var loose = LooseBoxScanner.Scan();

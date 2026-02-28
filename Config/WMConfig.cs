@@ -20,8 +20,11 @@ namespace WarehouseManager.Config
         internal static ConfigEntry<bool> OncePerDayEnabled = null!;
         internal static ConfigEntry<string> OncePerDayHHmm = null!; // "08:00" .. "21:00"
 
-        internal static ConfigEntry<bool> FateEnabled = null!;
         internal static ConfigEntry<bool> ShopManagerEnabled = null!;
+
+        // NEW: Stocker (replaces F(ATE))
+        internal static ConfigEntry<bool> StockerEnabled = null!;
+        internal static ConfigEntry<KeyboardShortcut> StockerHotkey = null!;
 
         // Debug suggestions
         internal static ConfigEntry<bool> DebugEnabled = null!;
@@ -59,10 +62,14 @@ namespace WarehouseManager.Config
 
             // 03 - Integration
             ShopManagerEnabled = cfg.Bind("03 - Integration", "Shop Manager Enabled", false,
-                "If enabled, runs Shop Manager before and after a Warehouse Manager execution (fills shop shelves from warehouse stock).");
+                "If enabled, runs Shop Manager before a Warehouse Manager execution (fills shop shelves from warehouse stock).");
 
-            FateEnabled = cfg.Bind("03 - Integration", "F(ATE) Enabled", false,
-                "If enabled, runs the F(ATE) integration before and after an order execution.");
+            StockerEnabled = cfg.Bind("03 - Integration", "Stocker Enabled", true,
+                "If enabled, Stocker moves unopened floor boxes into matching tagged warehouse compartments AFTER WM runs.");
+
+            StockerHotkey = cfg.Bind("03 - Integration", "Stocker Hotkey",
+                new KeyboardShortcut(KeyCode.F8),
+                "Hotkey to run Stocker manually (moves floor boxes into warehouse).");
 
             // 90 - Debug
             DebugEnabled = cfg.Bind("90 - Debug", "Enabled", false,

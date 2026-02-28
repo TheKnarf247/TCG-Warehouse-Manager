@@ -31,6 +31,16 @@ namespace WarehouseManager
             if (Time.realtimeSinceStartup - _lastPressTime < DebounceSeconds)
                 return;
 
+            // NEW: Stocker hotkey
+            if (WMConfig.StockerEnabled.Value && WMConfig.StockerHotkey.Value.IsDown())
+            {
+                _lastPressTime = Time.realtimeSinceStartup;
+
+                LogInfo("[WarehouseManager] Stocker hotkey detected. Moving floor boxes into warehouse...");
+                WarehouseManager.Automation.Stocker.RunOnce("ManualHotkey");
+                return;
+            }
+
             // Manual order execution hotkey (user-configurable)
             if (WMConfig.ManualHotkey.Value.IsDown())
             {
