@@ -8,6 +8,7 @@ using WarehouseManager.Config;
 using WarehouseManager.Integration;
 using WarehouseManager.Logging;
 using WarehouseManager.Automation;
+using System.Collections;
 
 namespace WarehouseManager
 {
@@ -122,26 +123,76 @@ namespace WarehouseManager
             WMFileLogger.Shutdown();
         }
 
+        // Prevent stacking multiple WM runs while we’re waiting for Shop Manager
+        private static bool _wmRunInFlight;
+
         // -----------------------------------------------------------------
-        // One wrapper to enforce run order around ANY WM execution
+        // One wrapper to enforce: Shop Manager (wait) -> WM -> Stocker (after)
         // -----------------------------------------------------------------
         internal static void RunWithIntegrations(string reasonTag, Action wmCoreRun)
         {
+            if (_wmRunInFlight)
+            {
+                LogWarn($"[WM] RunWithIntegrations ignored; previous run still in-flight ({reasonTag}).");
+                return;
+            }
+
+            _wmRunInFlight = true;
             try
             {
-                // Shop Manager BEFORE WM only
-                ShopManagerHook.TryRun($"Before WM ({reasonTag})");
-
-                // WM core
-                wmCoreRun.Invoke();
-
-                // Stocker AFTER WM only (replaces F(ATE))
-                Stocker.TryRun($"After WM ({reasonTag})");
+                Instance.StartCoroutine(RunWithIntegrations_Coroutine(reasonTag, wmCoreRun));
             }
             catch (Exception ex)
             {
-                LogWarn($"[WM] RunWithIntegrations failed ({reasonTag}): {ex}");
+                _wmRunInFlight = false;
+                LogWarn($"[WM] Failed to start coroutine ({reasonTag}): {ex}");
             }
+        }
+
+        private static IEnumerator RunWithIntegrations_Coroutine(string reasonTag, Action wmCoreRun)
+        {
+            // 1) Shop Manager first (wait until done)
+            if (WMConfig.ShopManagerEnabled.Value)
+            {
+                ShopManagerHook.TryStart($"Before WM ({reasonTag})");
+
+                float startedAt = Time.realtimeSinceStartup;
+                const float hardTimeoutSeconds = 120f;
+
+                while (ShopManagerHook.IsRunning)
+                {
+                    if (Time.realtimeSinceStartup - startedAt > hardTimeoutSeconds)
+                    {
+                        LogWarn($"[WM] Shop Manager wait timed out after {hardTimeoutSeconds}s ({reasonTag}). Continuing WM anyway.");
+                        break;
+                    }
+
+                    yield return null;
+                }
+            }
+
+            // 2) WM core execution
+            try
+            {
+                wmCoreRun.Invoke();
+            }
+            catch (Exception ex)
+            {
+                LogWarn($"[WM] WM core run failed ({reasonTag}): {ex}");
+            }
+
+            // 3) Stocker after WM
+            try
+            {
+                if (WMConfig.StockerEnabled.Value)
+                    Stocker.TryRun($"After WM ({reasonTag})");
+            }
+            catch (Exception ex)
+            {
+                LogWarn($"[WM] Stocker after-run failed ({reasonTag}): {ex}");
+            }
+
+            _wmRunInFlight = false;
         }
     }
 }

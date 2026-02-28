@@ -12,14 +12,11 @@ namespace WarehouseManager.Integration
     {
         private static bool _init;
 
-        private static Type? _refillServiceType;
-        private static MethodInfo? _runOnceMethod;
+        private static Type? _svcType;
+        private static MethodInfo? _startMethod;
+        private static PropertyInfo? _isRunningProp;
 
-        private static Type? _smConfigType;
-        private static FieldInfo? _smEnabledField;
-
-        private static bool _running;
-
+        // Optional logger hooks (same pattern as FateHook)
         private static Action<string>? _logInfo;
         private static Action<string>? _logWarn;
         private static Action<string>? _logDebug;
@@ -41,147 +38,98 @@ namespace WarehouseManager.Integration
 
             try
             {
-                _refillServiceType = AppDomain.CurrentDomain.GetAssemblies()
+                // ShopRefillService is in ShopManager.Services namespace
+                const string typeName = "ShopManager.Services.ShopRefillService";
+
+                _svcType = AppDomain.CurrentDomain.GetAssemblies()
                     .Select(a =>
                     {
-                        try { return a.GetType("ShopManager.Services.ShopRefillService", false); }
+                        try { return a.GetType(typeName, throwOnError: false); }
                         catch { return null; }
                     })
                     .FirstOrDefault(t => t != null);
 
-                if (_refillServiceType == null)
+                if (_svcType == null)
                 {
-                    DebugLog("[ShopManager] Not found (ShopManager.Services.ShopRefillService missing). Is Shop Manager installed?");
+                    DebugLog("[ShopManagerHook] Not found (ShopManager.Services.ShopRefillService missing). Is Shop Manager installed?");
                     return;
                 }
 
-                const BindingFlags BF = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
-                _runOnceMethod = _refillServiceType.GetMethod("RunOnce", BF);
+                const BindingFlags BF = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static;
 
-                if (_runOnceMethod == null)
+                _startMethod = _svcType.GetMethod("Start", BF);
+                _isRunningProp = _svcType.GetProperty("IsRunning", BF);
+
+                if (_startMethod == null)
                 {
-                    WarnLog("[ShopManager] Found type but not method RunOnce().");
-                    _refillServiceType = null;
+                    WarnLog("[ShopManagerHook] Found type but missing Start().");
+                    _svcType = null;
                     return;
                 }
 
-                _smConfigType = AppDomain.CurrentDomain.GetAssemblies()
-                    .Select(a =>
-                    {
-                        try { return a.GetType("ShopManager.Config.SMConfig", false); }
-                        catch { return null; }
-                    })
-                    .FirstOrDefault(t => t != null);
-
-                if (_smConfigType != null)
+                if (_isRunningProp == null)
                 {
-                    _smEnabledField = _smConfigType.GetField("Enabled",
-                        BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+                    WarnLog("[ShopManagerHook] Found type but missing IsRunning property.");
+                    _svcType = null;
+                    _startMethod = null;
+                    return;
                 }
 
-                InfoLog("[ShopManager] Hook ready.");
+                InfoLog("[ShopManagerHook] Hook ready.");
             }
             catch (Exception ex)
             {
-                WarnLog($"[ShopManager] Init failed: {ex}");
-                _refillServiceType = null;
-                _runOnceMethod = null;
-                _smConfigType = null;
-                _smEnabledField = null;
+                WarnLog($"[ShopManagerHook] Init failed: {ex}");
+                _svcType = null;
+                _startMethod = null;
+                _isRunningProp = null;
             }
         }
 
-        internal static bool TryRun(string phaseTag)
+        internal static bool IsReady => _svcType != null && _startMethod != null && _isRunningProp != null;
+
+        internal static bool IsRunning
         {
-            if (!WMConfig.ShopManagerEnabled.Value)
-                return false;
-
-            if (_refillServiceType == null || _runOnceMethod == null)
+            get
             {
-                DebugLog($"[ShopManager] ({phaseTag}) Not initialized (type/method missing).");
-                return false;
+                if (!IsReady) return false;
+                try
+                {
+                    var v = _isRunningProp!.GetValue(null, null);
+                    return v is bool b && b;
+                }
+                catch { return false; }
             }
+        }
 
-            if (_running)
-            {
-                WarnLog($"[ShopManager] ({phaseTag}) Already running. Skipping.");
-                return false;
-            }
+        internal static bool TryStart(string phaseTag)
+        {
+            // WM toggle gate
+            if (!WMConfig.ShopManagerEnabled.Value) return false;
 
-            if (!IsEnabledInShopManagerConfig(out var why))
+            if (!IsReady)
             {
-                WarnLog($"[ShopManager] ({phaseTag}) Installed but disabled in Shop Manager config ({why}). Skipping.");
+                DebugLog($"[ShopManagerHook] ({phaseTag}) Not initialized (type/method missing).");
                 return false;
             }
 
             try
             {
-                _running = true;
-                DebugLog($"[ShopManager] ({phaseTag}) Running ShopRefillService.RunOnce()...");
-                _runOnceMethod.Invoke(null, null);
-                InfoLog($"[ShopManager] ({phaseTag}) Ran ShopRefillService.RunOnce().");
+                if (IsRunning)
+                {
+                    DebugLog($"[ShopManagerHook] ({phaseTag}) Already running. Not starting a new session.");
+                    return true; // treat as “OK / in progress”
+                }
+
+                DebugLog($"[ShopManagerHook] ({phaseTag}) Calling ShopRefillService.Start()...");
+                _startMethod!.Invoke(null, null);
+                InfoLog($"[ShopManagerHook] ({phaseTag}) Started refill session.");
                 return true;
             }
             catch (Exception ex)
             {
-                WarnLog($"[ShopManager] ({phaseTag}) Hook failed: {ex.Message}");
+                WarnLog($"[ShopManagerHook] ({phaseTag}) Start failed: {ex.Message}");
                 return false;
-            }
-            finally
-            {
-                _running = false;
-            }
-        }
-
-        private static bool IsEnabledInShopManagerConfig(out string reason)
-        {
-            reason = "unknown";
-
-            if (_smConfigType == null || _smEnabledField == null)
-            {
-                reason = "SMConfig not found";
-                return true; // treat as enabled if we can't read it
-            }
-
-            try
-            {
-                object? ceObj = _smEnabledField.GetValue(null);
-                if (ceObj == null)
-                {
-                    reason = "Enabled field null";
-                    return true;
-                }
-
-                if (ceObj is ConfigEntry<bool> ceBool)
-                {
-                    reason = ceBool.Value ? "enabled" : "disabled";
-                    return ceBool.Value;
-                }
-
-                var valueProp = ceObj.GetType().GetProperty("Value", BindingFlags.Instance | BindingFlags.Public);
-                if (valueProp != null)
-                {
-                    var v = valueProp.GetValue(ceObj, null);
-                    if (v is bool b)
-                    {
-                        reason = b ? "enabled" : "disabled";
-                        return b;
-                    }
-
-                    if (v != null && bool.TryParse(v.ToString(), out bool parsed))
-                    {
-                        reason = parsed ? "enabled" : "disabled";
-                        return parsed;
-                    }
-                }
-
-                reason = "could not read Enabled.Value";
-                return true;
-            }
-            catch
-            {
-                reason = "exception reading config";
-                return true;
             }
         }
 
