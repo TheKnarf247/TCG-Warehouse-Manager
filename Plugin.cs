@@ -181,15 +181,63 @@ namespace WarehouseManager
                 LogWarn($"[WM] WM core run failed ({reasonTag}): {ex}");
             }
 
-            // 3) Stocker after WM
-            try
+            // 3) Wait for WM ordering to actually produce boxes, then Stocker
+
+            if (WMConfig.StockerEnabled.Value)
             {
-                if (WMConfig.StockerEnabled.Value)
-                    Stocker.TryRun($"After WM ({reasonTag})");
-            }
-            catch (Exception ex)
-            {
-                LogWarn($"[WM] Stocker after-run failed ({reasonTag}): {ex}");
+                int beforeCount = 0;
+
+                try
+                {
+                    var pre = RestockManager.GetItemPackagingBoxListWithItem(true);
+                    beforeCount = pre?.Count ?? 0;
+                }
+                catch { }
+
+                // ---- WAIT FOR SPAWN (NO try/catch around yield) ----
+                float startWait = Time.realtimeSinceStartup;
+                const float spawnWaitSeconds = 10f;
+                bool sawIncrease = false;
+
+                while (Time.realtimeSinceStartup - startWait < spawnWaitSeconds)
+                {
+                    int nowCount = 0;
+
+                    try
+                    {
+                        var cur = RestockManager.GetItemPackagingBoxListWithItem(true);
+                        nowCount = cur?.Count ?? 0;
+                    }
+                    catch { }
+
+                    if (nowCount > beforeCount)
+                    {
+                        sawIncrease = true;
+                        break;
+                    }
+
+                    yield return null; // ✅ safe now
+                }
+
+                // ---- SETTLE DELAY ----
+                float settleStart = Time.realtimeSinceStartup;
+                const float settleSeconds = 2f;
+
+                while (Time.realtimeSinceStartup - settleStart < settleSeconds)
+                    yield return null;
+
+                // ---- NOW RUN STOCKER (wrap this only) ----
+                try
+                {
+                    Stocker.TryRun($"After WM (post-order) ({reasonTag})");
+
+                    if (WMConfig.VerboseLogging.Value)
+                        LogVerbose($"[WM] Stocker post-order wait: sawIncrease={sawIncrease}, beforeBoxes={beforeCount}");
+                }
+                catch (Exception ex)
+                {
+                    LogWarn($"[WM] Stocker after-run failed ({reasonTag}): {ex}");
+                }
             }
 
             _wmRunInFlight = false;

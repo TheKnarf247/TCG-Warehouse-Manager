@@ -25,6 +25,7 @@ namespace WarehouseManager.Config
         // NEW: Stocker (replaces F(ATE))
         internal static ConfigEntry<bool> StockerEnabled = null!;
         internal static ConfigEntry<KeyboardShortcut> StockerHotkey = null!;
+        internal static ConfigEntry<int> StockerBoxesPerFrame = null!;
 
         // Debug suggestions
         internal static ConfigEntry<bool> DebugEnabled = null!;
@@ -63,14 +64,15 @@ namespace WarehouseManager.Config
             // 03 - Integration
             ShopManagerEnabled = cfg.Bind("03 - Integration", "Shop Manager Enabled", false,
                 "If enabled, runs Shop Manager before a Warehouse Manager execution (fills shop shelves from warehouse stock).");
-
-            StockerEnabled = cfg.Bind("03 - Integration", "Stocker Enabled", true,
+            
+            // 10 - Stocker
+            StockerEnabled = cfg.Bind("10-Stocker", "Stocker Enabled", true,
                 "If enabled, Stocker moves unopened floor boxes into matching tagged warehouse compartments AFTER WM runs.");
 
-            StockerHotkey = cfg.Bind("03 - Integration", "Stocker Hotkey",
+            StockerHotkey = cfg.Bind("10-Stocker", "Stocker Hotkey",
                 new KeyboardShortcut(KeyCode.F8),
                 "Hotkey to run Stocker manually (moves floor boxes into warehouse).");
-
+            
             // 90 - Debug
             DebugEnabled = cfg.Bind("90 - Debug", "Enabled", false,
                 "Enable debug features/logging.");
