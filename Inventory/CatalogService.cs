@@ -27,6 +27,10 @@ namespace WarehouseManager.Inventory
         }
 
         internal static bool IsRunning => _running;
+        internal static void SetRunning(bool running)
+        {
+            _running = running;
+        }
 
         /// <summary>
         /// Readiness gate used by the LoadingScreen hook (prevents running too early).
@@ -66,7 +70,7 @@ namespace WarehouseManager.Inventory
         /// </summary>
         internal static void BuildOneShotMerge(MonoBehaviour? host)
         {
-            if (_running || OneShotCatalogBuilder.IsRunning)
+            if (OneShotCatalogBuilder.IsRunning)
             {
                 Plugin.Logger.LogWarning("[CAT] Build already running.");
                 return;

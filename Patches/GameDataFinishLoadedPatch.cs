@@ -27,34 +27,34 @@ namespace WarehouseManager.Patches
         static void Prefix(object __0)
         {
             if (__0 == null) return;
+            if (__0.GetType().Name != "CEventPlayer_GameDataFinishLoaded") return;
+            if (_scheduled) return;
 
-            // Only react to the save-loaded event
-            if (__0.GetType().Name != "CEventPlayer_GameDataFinishLoaded")
-                return;
-
-            if (_scheduled) return;   // one-shot per game run
             _scheduled = true;
+
+            // lock ordering immediately
+            CatalogService.SetRunning(true);
 
             if (Plugin.Instance == null)
             {
                 Plugin.Logger.LogWarning("[CAT] GameDataFinishLoaded observed but Plugin.Instance is null.");
+                CatalogService.SetRunning(false);
                 return;
             }
 
             Plugin.Logger.LogInfo("[CAT] GameDataFinishLoaded observed. Scheduling catalog build...");
-
             Plugin.Instance.StartCoroutine(RunAfterReady());
         }
 
         private static IEnumerator RunAfterReady()
         {
-            // Let save + EPL finish settling
             for (int i = 0; i < 60; i++)
                 yield return null;
 
             if (!CatalogService.CanBuildNow())
             {
                 Plugin.Logger.LogWarning("[CAT] InventoryBase not ready after load; skipping catalog build.");
+                CatalogService.SetRunning(false);
                 yield break;
             }
 

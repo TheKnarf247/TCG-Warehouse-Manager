@@ -85,11 +85,8 @@ namespace WarehouseManager.Inventory
                 if (TryReadInt(mb, "m_MaxItemCount", "maxItemCount", out int rawMax) && rawMax > 0)
                     maxBoxes = rawMax;
 
-                var pack = PackagingInfo.Get(itemType);
-
-                bool isBig =
-                    pack.UpbBig > 0 &&
-                    (pack.UpbSmall <= 0 || pack.UpbBig >= pack.UpbSmall);
+                if (!TryReadBool(mb, "m_IsBigBox", "isBigBox", out bool isBig))
+                    continue;
 
                 if (!dict.TryGetValue(itemType, out var t))
                     t = default;
