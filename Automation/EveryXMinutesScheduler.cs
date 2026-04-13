@@ -69,6 +69,17 @@ namespace WarehouseManager.Automation
 
             _wasEnabledLastTick = true;
 
+            // Suspend while paused / in menus, and keep pushing the timer forward
+            // so runs do not stack up in the background.
+            if (IsGamePausedOrInMenu())
+            {
+                if (_nextRunAtRealtime > 0f)
+                    _nextRunAtRealtime = Time.realtimeSinceStartup + 1f;
+
+                DebugLog("[EveryXMinutes] Paused/UI mode -> scheduler suspended.");
+                return;
+            }
+
             int minutes = Mathf.Clamp(WMConfig.EveryXMinutes.Value, 1, 10);
 
             // If config changed, re-arm immediately (but don’t run instantly—schedule from now)
@@ -102,6 +113,25 @@ namespace WarehouseManager.Automation
             {
                 _warn?.Invoke($"[EveryXMinutes] Order execution failed: {ex}");
             }
+        }
+
+        private static bool IsGamePausedOrInMenu()
+        {
+            try
+            {
+                if (Time.timeScale <= 0f)
+                    return true;
+
+                var ipc = CSingleton<InteractionPlayerController>.Instance;
+                if (ipc != null && ipc.IsInUIMode())
+                    return true;
+            }
+            catch
+            {
+                // Ignore and treat as not paused
+            }
+
+            return false;
         }
 
         private static void DebugLog(string msg)
