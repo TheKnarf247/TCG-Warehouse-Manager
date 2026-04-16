@@ -117,21 +117,7 @@ namespace WarehouseManager.Automation
 
         private static bool IsGamePausedOrInMenu()
         {
-            try
-            {
-                if (Time.timeScale <= 0f)
-                    return true;
-
-                var ipc = CSingleton<InteractionPlayerController>.Instance;
-                if (ipc != null && ipc.IsInUIMode())
-                    return true;
-            }
-            catch
-            {
-                // Ignore and treat as not paused
-            }
-
-            return false;
+            return Time.timeScale <= 0f;
         }
 
         private static void DebugLog(string msg)

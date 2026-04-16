@@ -14,7 +14,7 @@ namespace WarehouseManager.Ordering
     {
         private const float DebounceSeconds = 0.50f;
         private static float _lastPressRealtime;
-
+        private static bool _executionRoutineRunning;
         private static readonly KeyCode OrderKey = KeyCode.F1; // Shift+F1
         private const bool AutoCheckout = true;
 
@@ -35,8 +35,15 @@ namespace WarehouseManager.Ordering
 
         internal static void RunOrder_FromCatalog()
         {
-            try
+            try              
+
             {
+                if (_executionRoutineRunning)
+                {
+                    Plugin.LogWarn("[ORDER] Skipped: order execution already in progress.");
+                    return;
+                }
+
                 Plugin.LogInfo("[WarehouseManager] Shift+F1 detected. Building order from catalog + inventory scans...");
 
                 var catalog = LoadCatalogAllSizes();
@@ -226,24 +233,8 @@ namespace WarehouseManager.Ordering
                 }
 
                 // Add to cart
-                foreach (var line in plan)
-                {
-                    Plugin.LogInfo(
-                        $"[ORDER] {line.itemType}: adding {line.boxes} {(line.bigBox ? "BIG" : "SMALL")} box(es) to cart " +
-                        $"idx={line.restockIndex} upb={line.upb}"
-                    );
-
-                    try
-                    {
-                        screen.AddToCartForCheckout(line.restockIndex, line.boxes);
-                        totalLinesPlanned++;
-                        totalBoxesPlanned += line.boxes;
-                    }
-                    catch (Exception ex)
-                    {
-                        Plugin.LogWarn($"[ORDER] AddToCartForCheckout failed for {line.itemType} idx={line.restockIndex}: {ex.Message}");
-                    }
-                }
+                Plugin.LogInfo($"[ORDER] Plan ready. Lines={plan.Count}. Starting staged cart execution...");
+                StartExecutionRoutine(screen, plan);
 
                 Plugin.LogInfo($"[ORDER] Cart filled. Lines added={totalLinesPlanned}, boxes added={totalBoxesPlanned}.");
 
@@ -334,6 +325,108 @@ namespace WarehouseManager.Ordering
             catch (Exception ex)
             {
                 Plugin.LogWarn($"[ORDER] Failed to clear scanner checkout cart: {ex}");
+            }
+        }
+
+        private static void StartExecutionRoutine(
+            ScannerRestockScreen screen,
+            List<(EItemType itemType, int restockIndex, int boxes, int upb, bool bigBox)> plan)
+        {
+            if (_executionRoutineRunning)
+            {
+                Plugin.LogWarn("[ORDER] Execution routine already running.");
+                return;
+            }
+
+            if (Plugin.Instance == null)
+            {
+                Plugin.LogWarn("[ORDER] Cannot start execution routine: Plugin.Instance is null.");
+                return;
+            }
+
+            Plugin.Instance.StartCoroutine(ExecutePlanRoutine(screen, plan));
+        }
+
+        private static System.Collections.IEnumerator ExecutePlanRoutine(
+            ScannerRestockScreen screen,
+            List<(EItemType itemType, int restockIndex, int boxes, int upb, bool bigBox)> plan)
+        {
+            _executionRoutineRunning = true;
+
+            int totalLinesAdded = 0;
+            int totalBoxesAdded = 0;
+
+            try
+            {
+                // Add one line per frame
+                foreach (var line in plan)
+                {
+                    Plugin.LogInfo(
+                        $"[ORDER] {line.itemType}: adding {line.boxes} {(line.bigBox ? "BIG" : "SMALL")} box(es) to cart " +
+                        $"idx={line.restockIndex} upb={line.upb}"
+                    );
+
+                    try
+                    {
+                        screen.AddToCartForCheckout(line.restockIndex, line.boxes);
+                        totalLinesAdded++;
+                        totalBoxesAdded += line.boxes;
+                    }
+                    catch (Exception ex)
+                    {
+                        Plugin.LogWarn($"[ORDER] AddToCartForCheckout failed for {line.itemType} idx={line.restockIndex}: {ex.Message}");
+                    }
+
+                    yield return null; // spread add-to-cart over frames
+                }
+
+                Plugin.LogInfo($"[ORDER] Cart filled. Lines added={totalLinesAdded}, boxes added={totalBoxesAdded}.");
+
+                if (AutoCheckout && totalBoxesAdded > 0)
+                {
+                    // Give UI/cart totals one frame to settle
+                    yield return null;
+
+                    Plugin.LogInfo("[ORDER] Auto-checkout enabled. Attempting checkout now...");
+
+                    if (CPlayerData.m_CoinAmountDouble < (double)screen.m_TotalCost)
+                    {
+                        Plugin.LogWarn(
+                            $"[ORDER] Not enough money for checkout. " +
+                            $"Need {screen.m_TotalCost:0.00}, have {CPlayerData.m_CoinAmountDouble:0.00}. Clearing cart."
+                        );
+
+                        NotEnoughResourceTextPopup.ShowText(ENotEnoughResourceText.Money);
+                        SoundManager.GenericCancel(1f, 1f);
+                        ClearScannerCheckoutCart(screen);
+                    }
+                    else
+                    {
+                        try
+                        {
+                            screen.OnPressCheckoutButton();
+                            Plugin.LogInfo("[ORDER] Checkout attempted. Boxes should be spawning now.");
+                        }
+                        catch (Exception ex)
+                        {
+                            Plugin.LogWarn($"[ORDER] Checkout failed unexpectedly: {ex.Message}");
+                        }
+                        finally
+                        {
+                            ClearScannerCheckoutCart(screen);
+                        }
+                    }
+
+                    FatePostRunner.RunDelayed(8f);
+                }
+                else
+                {
+                    Plugin.LogInfo("[ORDER] Auto-checkout disabled. Cart is ready; open scanner restock UI and press checkout.");
+                }
+            }
+            finally
+            {
+                _executionRoutineRunning = false;
             }
         }
 
