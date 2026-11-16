@@ -11,6 +11,17 @@ namespace WarehouseManager.Automation
     {
         private static bool _isRunning;
 
+        // One reason per skipped physical box; reported once per Stocker run.
+        private enum SkipReason
+        {
+            InvalidOrUnavailable,
+            NoAssignedShelf,
+            NoFreeSlot,
+            WrongBoxSize,
+            NoSlotTransform
+        }
+
+
         // Faster: use EItemType as key (no ToString allocations, no string comparisons)
         private static readonly Dictionary<EItemType, List<ShelfCompartment>> _targetsByItemType = new();
 
@@ -53,19 +64,35 @@ namespace WarehouseManager.Automation
 
                 int moved = 0;
                 int skipped = 0;
+                int invalid = 0;
+                int noTarget = 0;
+                int full = 0;
+                int wrongSize = 0;
+                int noTransform = 0;
 
                 for (int i = 0; i < boxes.Count; i++)
                 {
                     var box = boxes[i];
-                    if (box == null) { skipped++; continue; }
-
-                    if (TryMoveBox(box))
+                    SkipReason why;
+                    if (TryMoveBox(box, out why))
+                    {
                         moved++;
-                    else
-                        skipped++;
+                        continue;
+                    }
+
+                    skipped++;
+                    switch (why)
+                    {
+                        case SkipReason.NoAssignedShelf: noTarget++; break;
+                        case SkipReason.NoFreeSlot: full++; break;
+                        case SkipReason.WrongBoxSize: wrongSize++; break;
+                        case SkipReason.NoSlotTransform: noTransform++; break;
+                        default: invalid++; break;
+                    }
                 }
 
-                Plugin.LogInfo($"[Stocker] {reasonTag}: moved={moved}, skipped={skipped}");
+                Plugin.LogInfo($"[Stocker] {reasonTag}: moved={moved}, skipped={skipped} " +
+                    $"(invalid/held={invalid}, noTarget={noTarget}, full={full}, wrongSize={wrongSize}, noTransform={noTransform})");
             }
             catch (Exception e)
             {
@@ -137,7 +164,7 @@ namespace WarehouseManager.Automation
                     if (storage == null) continue;
 
                     var shelfComp = storage.GetShelfCompartment();
-                    if (shelfComp == null) continue;
+                    if (shelfComp == null || !shelfComp.m_CanPutBox) continue;
 
                     var itemType = shelfComp.GetItemType();
 
@@ -156,57 +183,95 @@ namespace WarehouseManager.Automation
             }
         }
 
-        private static bool TryMoveBox(InteractablePackagingBox_Item box)
+        private static bool TryMoveBox(InteractablePackagingBox_Item box, out SkipReason reason)
         {
-            if (box.m_IsStored) return false;
-            if (box.IsBoxOpened()) return false;
+            reason = SkipReason.InvalidOrUnavailable;
 
-            if (box.m_Collider != null && !box.m_Collider.enabled) return false;
+            if (box == null || box.m_IsStored || box.m_IsBeingHold || box.IsBoxOpened())
+                return false;
+
+            if (box.m_Collider != null && !box.m_Collider.enabled)
+                return false;
 
             var itemType = box.GetItemType();
-            if (itemType == EItemType.None)
+            if (itemType == EItemType.None || box.m_ItemCompartment == null ||
+                box.m_ItemCompartment.GetItemCount() <= 0)
                 return false;
-
-            var count = box.m_ItemCompartment != null ? box.m_ItemCompartment.GetItemCount() : 0;
-            if (count <= 0) return false;
 
             if (!_targetsByItemType.TryGetValue(itemType, out var candidates) || candidates.Count == 0)
+            {
+                reason = SkipReason.NoAssignedShelf;
                 return false;
+            }
 
             bool isBigBox = box.m_IsBigBox;
+            bool sawFull = false;
+            bool sawSizeMismatch = false;
+            bool sawMissingTransform = false;
 
             for (int i = 0; i < candidates.Count; i++)
             {
                 var target = candidates[i];
-                if (target == null) continue;
+                if (target == null || !target.m_CanPutBox || target.GetItemType() != itemType)
+                    continue;
 
-                var existing = target.GetInteractablePackagingBoxList();
-                if (existing != null && existing.Count > 0)
+                // The new game stores boxes as StoredBoxRecord. Its physical-box
+                // list can be empty even when the compartment is completely full.
+                int occupied = target.GetItemCount();
+                int storedRecords = target.GetStoredBoxRecordCount();
+                var physical = target.GetInteractablePackagingBoxList();
+
+                if (occupied > 0 || storedRecords > 0 || (physical != null && physical.Count > 0))
                 {
-                    var last = target.GetLastInteractablePackagingBox();
-                    if (last == null) continue;
-
-                    if (last.m_IsBigBox != isBigBox)
+                    if (target.GetIsBigBox() != isBigBox)
+                    {
+                        sawSizeMismatch = true;
                         continue;
+                    }
 
-                    if (!target.HasEnoughSlot())
+                    if (storedRecords > 0 && target.PeekStoredBoxRecord(0).isBigBox != isBigBox)
+                    {
+                        sawSizeMismatch = true;
                         continue;
+                    }
+                }
+                else
+                {
+                    // Updates the capacity/position layout for the incoming box size.
+                    // Only do this for an empty compartment.
+                    target.CheckBoxType(isBigBox);
                 }
 
+                // Must be checked unconditionally: GetEmptySlotTransform clamps
+                // an out-of-range index onto the LAST slot of a full shelf.
+                int capacity = target.GetMaxItemCount();
+                if (capacity <= 0 || occupied >= capacity || !target.HasEnoughSlot())
+                {
+                    sawFull = true;
+                    continue;
+                }
+
+                var slot = target.GetEmptySlotTransform();
+                if (slot == null)
+                {
+                    sawMissingTransform = true;
+                    continue;
+                }
+
+                // Leave the existing game's deposit call untouched until we
+                // inspect InteractablePackagingBox_Item.DispenseItem implementation.
                 box.SetPhysicsEnabled(false);
-
-                var t = target.GetEmptySlotTransform();
-                if (t != null)
-                {
-                    box.transform.position = t.position;
-                    box.transform.rotation = t.rotation;
-                }
-
+                box.transform.position = slot.position;
+                box.transform.rotation = slot.rotation;
                 box.DispenseItem(false, target);
                 target.SetPriceTagItemAmountText();
                 return true;
             }
 
+            reason = sawFull ? SkipReason.NoFreeSlot :
+                     sawSizeMismatch ? SkipReason.WrongBoxSize :
+                     sawMissingTransform ? SkipReason.NoSlotTransform :
+                     SkipReason.NoAssignedShelf;
             return false;
         }
     }

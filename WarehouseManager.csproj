@@ -2,7 +2,6 @@
 
   <PropertyGroup>
     <TargetFramework>netstandard2.1</TargetFramework>
-    <RootNamespace>WarehouseManager</RootNamespace>
     <Nullable>enable</Nullable>
   
 	<LangVersion>latest</LangVersion>
@@ -14,7 +13,7 @@
 
 	  <RootNamespace>WarehouseManager</RootNamespace>
 	  <AssemblyName>WarehouseManager</AssemblyName>
-	  <Version>$(Beta)0.9.4</Version>
+	  <Version>$(Beta)0.9.6</Version>
 	  <AssemblyTitle>Warehouse Manager</AssemblyTitle>
 
   </PropertyGroup>
