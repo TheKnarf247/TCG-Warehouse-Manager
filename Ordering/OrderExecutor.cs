@@ -35,7 +35,7 @@ namespace WarehouseManager.Ordering
 
         internal static void RunOrder_FromCatalog()
         {
-            try              
+            try
 
             {
                 if (_executionRoutineRunning)
@@ -70,7 +70,7 @@ namespace WarehouseManager.Ordering
                     Plugin.LogWarn("[ORDER] Could not find ScannerRestockScreen in scene. Open the Scanner Restock UI once, then try again.");
                     return;
                 }
-                                
+
                 var wh = WarehouseInventoryScanner.Scan();
                 var sh = ShopInventoryScanner.Scan();
                 var loose = LooseBoxScanner.Scan();
@@ -108,176 +108,190 @@ namespace WarehouseManager.Ordering
 
                 var plan = new List<(EItemType itemType, int restockIndex, int boxes, int upb, bool bigBox)>();
 
-                foreach (var itemType in allKeys.OrderBy(k => k.ToString(), StringComparer.OrdinalIgnoreCase))
+                bool autoWarehouseHandled = AutoWarehouseOrderPlanner.TryPlan(
+    sh.Keys,
+    catalog.SelectMany(pair => pair.Value
+        .Where(row => IsRestockLicenseUnlocked(row.RestockIndex))
+        .Select(row => (pair.Key, row.RestockIndex, row.UnitsPerBox, row.BigBox))),
+    plan,
+    Plugin.LogInfo,
+    Plugin.LogWarn);
+
+                if (!autoWarehouseHandled)
                 {
-                    if (!catalog.TryGetValue(itemType, out var records) || records == null || records.Count == 0)
-                    {
-                        skipNotInCatalog++;
-                        Plugin.LogVerbose($"[ORDER][V] {itemType} SKIP: not in catalog");
-                        continue;
-                    }
 
-                    
-                    sh.TryGetValue(itemType, out var shopT);
-                    int shopCur = shopT.Current;
-                    int shopMax = shopT.Max;
-
-                    wh.TryGetValue(itemType, out var whT);
-                    loose.TryGetValue(itemType, out var looseT);
-                    int looseUnitsCur = looseT.UnitsCur;
-
-                    bool useBig;
-                    if (whT.BoxesMaxBig > 0)
-                        useBig = true;
-                    else if (whT.BoxesMaxSmall > 0)
-                        useBig = false;
-                    else
+                    foreach (var itemType in allKeys.OrderBy(k => k.ToString(), StringComparer.OrdinalIgnoreCase))
                     {
-                        skipNoSlots++;
-                        Plugin.LogVerbose($"[ORDER][V] {itemType} SKIP: no warehouse slot size configured");
-                        continue;
-                    }
+                        if (!catalog.TryGetValue(itemType, out var records) || records == null || records.Count == 0)
+                        {
+                            skipNotInCatalog++;
+                            Plugin.LogVerbose($"[ORDER][V] {itemType} SKIP: not in catalog");
+                            continue;
+                        }
 
-                    var rec = SelectCatalogRecordForShelfSize(catalog, itemType, useBig);
-                    if (rec == null)
-                    {
-                        skipNotInCatalog++;
-                        Plugin.LogInfo($"[ORDER] {itemType}: no catalog entry for {(useBig ? "BIG" : "SMALL")} box size.");
-                        continue;
-                    }
-                    
-                    if (!IsRestockLicenseUnlocked(rec.RestockIndex))
-                    {
-                        Plugin.LogInfo(
-                            $"[ORDER] {itemType}: skipped, " +
-                            $"{(useBig ? "BIG" : "SMALL")} restock entry locked (idx={rec.RestockIndex})."
+
+                        sh.TryGetValue(itemType, out var shopT);
+                        int shopCur = shopT.Current;
+                        int shopMax = shopT.Max;
+
+                        wh.TryGetValue(itemType, out var whT);
+                        loose.TryGetValue(itemType, out var looseT);
+                        int looseUnitsCur = looseT.UnitsCur;
+
+                        bool useBig;
+                        if (whT.BoxesMaxBig > 0)
+                            useBig = true;
+                        else if (whT.BoxesMaxSmall > 0)
+                            useBig = false;
+                        else
+                        {
+                            skipNoSlots++;
+                            Plugin.LogVerbose($"[ORDER][V] {itemType} SKIP: no warehouse slot size configured");
+                            continue;
+                        }
+
+                        var rec = SelectCatalogRecordForShelfSize(catalog, itemType, useBig);
+                        if (rec == null)
+                        {
+                            skipNotInCatalog++;
+                            Plugin.LogInfo($"[ORDER] {itemType}: no catalog entry for {(useBig ? "BIG" : "SMALL")} box size.");
+                            continue;
+                        }
+
+                        if (!IsRestockLicenseUnlocked(rec.RestockIndex))
+                        {
+                            Plugin.LogInfo(
+                                $"[ORDER] {itemType}: skipped, " +
+                                $"{(useBig ? "BIG" : "SMALL")} restock entry locked (idx={rec.RestockIndex})."
+                            );
+                            continue;
+                        }
+
+                        int upb = rec.UnitsPerBox;
+                        if (upb <= 0)
+                            continue;
+
+                        int whCur = useBig ? whT.BoxesCurBig : whT.BoxesCurSmall;
+                        int whMax = useBig ? whT.BoxesMaxBig : whT.BoxesMaxSmall;
+                        int reservedSlots = useBig ? looseT.BigBoxes : looseT.SmallBoxes;
+
+                        int whUnitsCur = whCur * upb;
+                        int whUnitsMax = whMax * upb;
+
+                        int onHand = shopCur + whUnitsCur + looseUnitsCur;
+                        int targetMax = shopMax + whUnitsMax;
+                        int needUnits = targetMax - onHand;
+
+                        int slotsFree = Math.Max(0, whMax - whCur - reservedSlots);
+
+                        Plugin.LogVerbose(
+                            $"[ORDER][V] {itemType} | shop {shopCur}/{shopMax} | " +
+                            $"WH{(useBig ? "big" : "small")} {whCur}/{whMax} upb={upb} | " +
+                            $"loose units={looseUnitsCur} loose{(useBig ? "Big" : "Small")}={reservedSlots} | " +
+                            $"onHand={onHand} target={targetMax} need={needUnits} freeSlots={slotsFree}"
                         );
-                        continue;
-                    }
 
-                    int upb = rec.UnitsPerBox;
-                    if (upb <= 0)
-                        continue;
+                        if (needUnits <= 0)
+                        {
+                            skipNeedZero++;
+                            Plugin.LogVerbose($"[ORDER][V] {itemType} SKIP: needUnits<=0");
+                            continue;
+                        }
 
-                    int whCur = useBig ? whT.BoxesCurBig : whT.BoxesCurSmall;
-                    int whMax = useBig ? whT.BoxesMaxBig : whT.BoxesMaxSmall;
-                    int reservedSlots = useBig ? looseT.BigBoxes : looseT.SmallBoxes;
+                        if (slotsFree <= 0)
+                        {
+                            skipNoSlots++;
+                            Plugin.LogInfo(
+                                $"[ORDER] {itemType}: needs {needUnits} units but no free {(useBig ? "BIG" : "SMALL")} slots. " +
+                                $"WH {whCur}/{whMax}, reserved(loose)={reservedSlots}."
+                            );
+                            continue;
+                        }
 
-                    int whUnitsCur = whCur * upb;
-                    int whUnitsMax = whMax * upb;
+                        int maxBoxesByNeed = needUnits / upb;
+                        if (maxBoxesByNeed <= 0)
+                        {
+                            skipOverfill++;
+                            Plugin.LogInfo(
+                                $"[ORDER] {itemType}: needs {needUnits} units but +1 {(useBig ? "big" : "small")} box ({upb}) " +
+                                $"would overfill ({onHand + upb}/{targetMax})."
+                            );
+                            continue;
+                        }
 
-                    int onHand = shopCur + whUnitsCur + looseUnitsCur;
-                    int targetMax = shopMax + whUnitsMax;
-                    int needUnits = targetMax - onHand;
+                        int boxesToOrder = Math.Min(maxBoxesByNeed, slotsFree);
+                        if (boxesToOrder <= 0)
+                        {
+                            skipZeroBoxes++;
+                            Plugin.LogVerbose($"[ORDER][V] {itemType} SKIP: boxesToOrder<=0 (maxByNeed={maxBoxesByNeed}, freeSlots={slotsFree})");
+                            continue;
+                        }
 
-                    int slotsFree = Math.Max(0, whMax - whCur - reservedSlots);
-
-                    Plugin.LogVerbose(
-                        $"[ORDER][V] {itemType} | shop {shopCur}/{shopMax} | " +
-                        $"WH{(useBig ? "big" : "small")} {whCur}/{whMax} upb={upb} | " +
-                        $"loose units={looseUnitsCur} loose{(useBig ? "Big" : "Small")}={reservedSlots} | " +
-                        $"onHand={onHand} target={targetMax} need={needUnits} freeSlots={slotsFree}"
-                    );
-
-                    if (needUnits <= 0)
-                    {
-                        skipNeedZero++;
-                        Plugin.LogVerbose($"[ORDER][V] {itemType} SKIP: needUnits<=0");
-                        continue;
-                    }
-
-                    if (slotsFree <= 0)
-                    {
-                        skipNoSlots++;
-                        Plugin.LogInfo(
-                            $"[ORDER] {itemType}: needs {needUnits} units but no free {(useBig ? "BIG" : "SMALL")} slots. " +
-                            $"WH {whCur}/{whMax}, reserved(loose)={reservedSlots}."
+                        Plugin.LogVerbose(
+                            $"[ORDER][V] {itemType} PLAN: boxesToOrder={boxesToOrder} " +
+                            $"restockIdx={rec.RestockIndex} size={(useBig ? "BIG" : "SMALL")}"
                         );
-                        continue;
+
+                        plan.Add((itemType, rec.RestockIndex, boxesToOrder, upb, useBig));
                     }
-
-                    int maxBoxesByNeed = needUnits / upb;
-                    if (maxBoxesByNeed <= 0)
-                    {
-                        skipOverfill++;
-                        Plugin.LogInfo(
-                            $"[ORDER] {itemType}: needs {needUnits} units but +1 {(useBig ? "big" : "small")} box ({upb}) " +
-                            $"would overfill ({onHand + upb}/{targetMax})."
-                        );
-                        continue;
-                    }
-
-                    int boxesToOrder = Math.Min(maxBoxesByNeed, slotsFree);
-                    if (boxesToOrder <= 0)
-                    {
-                        skipZeroBoxes++;
-                        Plugin.LogVerbose($"[ORDER][V] {itemType} SKIP: boxesToOrder<=0 (maxByNeed={maxBoxesByNeed}, freeSlots={slotsFree})");
-                        continue;
-                    }
-
-                    Plugin.LogVerbose(
-                        $"[ORDER][V] {itemType} PLAN: boxesToOrder={boxesToOrder} " +
-                        $"restockIdx={rec.RestockIndex} size={(useBig ? "BIG" : "SMALL")}"
-                    );
-
-                    plan.Add((itemType, rec.RestockIndex, boxesToOrder, upb, useBig));
                 }
 
-                Plugin.LogVerbose($"[ORDER][V] Skip summary: notInCatalog={skipNotInCatalog}, needZero={skipNeedZero}, noSlots={skipNoSlots}, overfill={skipOverfill}, zeroBoxes={skipZeroBoxes}");
-                Plugin.LogVerbose($"[ORDER][V] Plan lines={plan.Count}");
+                    Plugin.LogVerbose($"[ORDER][V] Skip summary: notInCatalog={skipNotInCatalog}, needZero={skipNeedZero}, noSlots={skipNoSlots}, overfill={skipOverfill}, zeroBoxes={skipZeroBoxes}");
+                    Plugin.LogVerbose($"[ORDER][V] Plan lines={plan.Count}");
 
-                if (plan.Count == 0)
-                {
-                    Plugin.LogInfo("[ORDER] No items need ordering (or ordering would overfill).");
-                    return;
-                }
-
-                // Add to cart
-                Plugin.LogInfo($"[ORDER] Plan ready. Lines={plan.Count}. Starting staged cart execution...");
-                StartExecutionRoutine(screen, plan);
-
-                Plugin.LogInfo($"[ORDER] Cart filled. Lines added={totalLinesPlanned}, boxes added={totalBoxesPlanned}.");
-
-                // Auto-checkout
-                if (AutoCheckout && totalBoxesPlanned > 0)
-                {
-                    Plugin.LogInfo("[ORDER] Auto-checkout enabled. Attempting checkout now...");
-
-                    if (CPlayerData.m_CoinAmountDouble < (double)screen.m_TotalCost)
+                    if (plan.Count == 0)
                     {
-                        Plugin.LogWarn(
-                            $"[ORDER] Not enough money for checkout. " +
-                            $"Need {screen.m_TotalCost:0.00}, have {CPlayerData.m_CoinAmountDouble:0.00}. Clearing cart."
-                        );
-
-                        NotEnoughResourceTextPopup.ShowText(ENotEnoughResourceText.Money);
-                        SoundManager.GenericCancel(1f, 1f);
-                        ClearScannerCheckoutCart(screen);
+                        Plugin.LogInfo("[ORDER] No items need ordering (or ordering would overfill).");
+                        return;
                     }
-                    else
+
+                    // Add to cart
+                    Plugin.LogInfo($"[ORDER] Plan ready. Lines={plan.Count}. Starting staged cart execution...");
+                    StartExecutionRoutine(screen, plan);
+
+                    Plugin.LogInfo($"[ORDER] Cart filled. Lines added={totalLinesPlanned}, boxes added={totalBoxesPlanned}.");
+
+                    // Auto-checkout
+                    if (AutoCheckout && totalBoxesPlanned > 0)
                     {
-                        try
+                        Plugin.LogInfo("[ORDER] Auto-checkout enabled. Attempting checkout now...");
+
+                        if (CPlayerData.m_CoinAmountDouble < (double)screen.m_TotalCost)
                         {
-                            screen.OnPressCheckoutButton();
-                            Plugin.LogInfo("[ORDER] Checkout attempted. Boxes should be spawning now.");
-                        }
-                        catch (Exception ex)
-                        {
-                            Plugin.LogWarn($"[ORDER] Checkout failed unexpectedly: {ex.Message}");
-                        }
-                        finally
-                        {
+                            Plugin.LogWarn(
+                                $"[ORDER] Not enough money for checkout. " +
+                                $"Need {screen.m_TotalCost:0.00}, have {CPlayerData.m_CoinAmountDouble:0.00}. Clearing cart."
+                            );
+
+                            NotEnoughResourceTextPopup.ShowText(ENotEnoughResourceText.Money);
+                            SoundManager.GenericCancel(1f, 1f);
                             ClearScannerCheckoutCart(screen);
                         }
-                    }
+                        else
+                        {
+                            try
+                            {
+                                screen.OnPressCheckoutButton();
+                                Plugin.LogInfo("[ORDER] Checkout attempted. Boxes should be spawning now.");
+                            }
+                            catch (Exception ex)
+                            {
+                                Plugin.LogWarn($"[ORDER] Checkout failed unexpectedly: {ex.Message}");
+                            }
+                            finally
+                            {
+                                ClearScannerCheckoutCart(screen);
+                            }
+                        }
 
-                    FatePostRunner.RunDelayed(8f);
+                        FatePostRunner.RunDelayed(8f);
+                    }
+                    else
+                    {
+                        Plugin.LogInfo("[ORDER] Auto-checkout disabled. Cart is ready; open scanner restock UI and press checkout.");
+                    }
                 }
-                else
-                {
-                    Plugin.LogInfo("[ORDER] Auto-checkout disabled. Cart is ready; open scanner restock UI and press checkout.");
-                }
-            }
+          
             catch (Exception ex)
             {
                 Plugin.LogError($"[ORDER] RunOrder_FromCatalog failed: {ex}");

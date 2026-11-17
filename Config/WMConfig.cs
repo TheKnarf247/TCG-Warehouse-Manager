@@ -64,7 +64,9 @@ namespace WarehouseManager.Config
             // 03 - Integration
             ShopManagerEnabled = cfg.Bind("03 - Integration", "Shop Manager Enabled", false,
                 "If enabled, runs Shop Manager before a Warehouse Manager execution (fills shop shelves from warehouse stock).");
-            
+
+            WarehouseManager.Ordering.AutoWarehouseOrderPlanner.Bind(cfg);
+
             // 10 - Stocker
             StockerEnabled = cfg.Bind("10-Stocker", "Stocker Enabled", true,
                 "If enabled, Stocker moves unopened floor boxes into matching tagged warehouse compartments AFTER WM runs.");
